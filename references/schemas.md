@@ -81,6 +81,48 @@ class UserRead(UserBase):
 - `gt` / `ge` / `lt` / `le` for numbers
 - `pattern` for regex validation (e.g., `pattern=r"^[a-z0-9_]+$"` for slugs)
 
+### UUID Fields
+
+When models use UUID primary keys (via `uuid_pk()`), use `uuid.UUID` in schema fields for all ID and foreign key references. Pydantic v2 serializes `uuid.UUID` to strings in JSON responses automatically and validates UUID format on incoming requests.
+
+```python
+import uuid
+
+from pydantic import BaseModel, ConfigDict
+
+
+class BuildingRead(BuildingBase):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    created_at: datetime
+    updated_at: datetime
+
+
+class BuildingSpaceCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    building_id: uuid.UUID  # required FK
+    unit_number: str
+
+
+class RentalSpaceBase(BaseModel):
+    rental_space_type_id: uuid.UUID | None = None  # optional FK
+```
+
+Use `uuid.UUID` for:
+- `id` fields on all Read schemas
+- Required foreign key fields on Create/Base schemas (e.g., `building_id: uuid.UUID`)
+- Optional foreign key fields (e.g., `rental_space_type_id: uuid.UUID | None = None`)
+- Nested summary schemas (e.g., `TenantSummary.id: uuid.UUID`)
+- Filter schemas when filtering by a UUID FK (e.g., `rental_space_type_id: uuid.UUID | None = None`)
+
+Do NOT use `uuid.UUID` for:
+- Fields that are not UUIDs (e.g., Celery task IDs which are arbitrary strings)
+- `int` primary keys (use `int` as before)
+
+The type must be consistent across all layers: `Mapped[uuid.UUID]` in the model, `uuid.UUID` in the schema, `Uuid` in the column. See [sqlalchemy-usage.md](sqlalchemy-usage.md#uuid-primary-keys) for the model-side pattern.
+
 ### Decimal Fields
 
 Use `Decimal` (not `float`) for monetary values, prices, and precise measurements. This matches the `Numeric` column type in the ORM layer and preserves precision across serialization.

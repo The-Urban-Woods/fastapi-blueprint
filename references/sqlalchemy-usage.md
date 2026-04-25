@@ -36,19 +36,51 @@ Use mixins to share common columns across models. Define them in `app/shared/dat
 
 ### Timestamp Mixin
 
+Uses `utc_now()` — a cross-dialect function that guarantees UTC timestamps regardless of database server timezone configuration. On PostgreSQL, `func.now()` returns server-local time which may not be UTC. `utc_now()` compiles to `TIMEZONE('utc', CURRENT_TIMESTAMP)` on PostgreSQL and `datetime('now')` on SQLite (which is already UTC).
+
+`DateTime(timezone=True)` stores timezone-aware timestamps — `TIMESTAMPTZ` on PostgreSQL, standard `DATETIME` on SQLite.
+
 ```python
 from datetime import datetime
+from typing import Any
 
-from sqlalchemy import func
+from sqlalchemy import DATETIME, DateTime
+from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.sql import functions
+from sqlalchemy.sql.compiler import SQLCompiler
+from sqlalchemy.sql.elements import ClauseElement
+
+
+class utc_now(functions.GenericFunction):
+    """Database-side UTC timestamp. Guarantees UTC regardless of server timezone."""
+
+    type = DATETIME()
+    inherit_cache = True
+
+
+@compiles(utc_now, "postgresql")
+def _pg_utc_now(element: ClauseElement, compiler: SQLCompiler, **kwargs: Any) -> str:
+    return "TIMEZONE('utc', CURRENT_TIMESTAMP)"
+
+
+@compiles(utc_now, "sqlite")
+def _sqlite_utc_now(element: ClauseElement, compiler: SQLCompiler, **kwargs: Any) -> str:
+    return "datetime('now')"
 
 
 class TimestampMixin:
-    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=utc_now()
+    )
     updated_at: Mapped[datetime] = mapped_column(
-        server_default=func.now(), onupdate=func.now()
+        DateTime(timezone=True), server_default=utc_now(), onupdate=utc_now()
     )
 ```
+
+Place `utc_now` and the `@compiles` functions in `app/shared/database.py` alongside `Base` and the mixins.
+
+**Why not `func.now()`?** On PostgreSQL, `func.now()` compiles to `now()` which returns a timestamp in the **server's configured timezone** — if the server is set to `Europe/Amsterdam`, you get Amsterdam time, not UTC. `utc_now()` forces UTC on every dialect.
 
 Apply to models:
 
@@ -125,6 +157,41 @@ class Product(Base):
 - Use `String(n)` for bounded text, `Text` for unbounded
 - Use `Numeric(precision, scale)` for monetary values, never `Float`
 - Use `Mapped[Decimal]` (not `Mapped[float]`) with `Numeric` columns — this preserves precision across the ORM boundary and matches the Pydantic `Decimal` type in schemas
+
+### UUID Primary Keys
+
+For models that use UUID primary keys, use the `uuid_pk()` helper defined in `app/shared/database.py`. It uses database-side generation on PostgreSQL (`gen_random_uuid()`) and falls back to Python `uuid.uuid4()` on other dialects.
+
+```python
+import uuid
+
+from app.shared.database import Base, TimestampMixin, uuid_pk
+
+
+class User(TimestampMixin, Base):
+    __tablename__ = "users"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+```
+
+For UUID foreign key columns, use the `Uuid` type directly:
+
+```python
+from sqlalchemy import Uuid
+
+building_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("buildings.id"), index=True)
+```
+
+The `Uuid` column type (SQLAlchemy 2.0+) is cross-dialect -- native `UUID` on PostgreSQL, `CHAR(32)` on SQLite. Pydantic v2 serializes `uuid.UUID` to strings in JSON automatically.
+
+For the full `GenerateUUID` and `uuid_pk()` implementation, see [database-setup.md](database-setup.md#uuid-primary-key-helper).
+
+When using UUID IDs, the type must be `uuid.UUID` consistently across all layers:
+- **Models**: `Mapped[uuid.UUID]` for PK and FK columns
+- **Schemas**: `id: uuid.UUID` in Read schemas, `building_id: uuid.UUID` in Create/Base schemas (see [schemas.md](schemas.md#uuid-fields))
+- **Repositories and services**: generic param `uuid.UUID` as `IdType`, method signatures use `id: uuid.UUID`
+- **API endpoints**: path parameters typed as `uuid.UUID` (FastAPI validates the format automatically)
 
 ### Date and Time Columns
 
