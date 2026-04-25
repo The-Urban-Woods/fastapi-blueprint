@@ -28,37 +28,7 @@ The naming convention ensures all constraints get predictable names, which is re
 
 ## Pydantic Schemas
 
-Define request/response schemas in each domain's `schemas.py`:
-
-```python
-from datetime import datetime
-
-from pydantic import BaseModel, ConfigDict
-
-
-class UserBase(BaseModel):
-    email: str
-    name: str
-
-
-class UserCreate(UserBase):
-    pass
-
-
-class UserUpdate(BaseModel):
-    email: str | None = None
-    name: str | None = None
-    is_active: bool | None = None
-
-
-class UserRead(UserBase):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: int
-    is_active: bool
-    created_at: datetime
-    updated_at: datetime
-```
+Define request/response schemas in each domain's `schemas.py`. For naming conventions, field constraints, validators, ConfigDict options, and all schema patterns see [schemas.md](schemas.md).
 
 ## Engine and Session via DI
 
