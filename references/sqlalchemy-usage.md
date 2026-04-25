@@ -67,6 +67,37 @@ class User(TimestampMixin, Base):
 
 Mixin must appear before `Base` in the class hierarchy.
 
+### Soft Delete Mixin
+
+For models that should be deactivated rather than permanently removed:
+
+```python
+from datetime import datetime
+
+from sqlalchemy.orm import Mapped, mapped_column
+
+
+class SoftDeleteMixin:
+    is_deleted: Mapped[bool] = mapped_column(default=False)
+    deleted_at: Mapped[datetime | None] = mapped_column(default=None)
+```
+
+Apply alongside `TimestampMixin`:
+
+```python
+from app.shared.database import Base, TimestampMixin, SoftDeleteMixin
+
+
+class User(SoftDeleteMixin, TimestampMixin, Base):
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(255))
+```
+
+The service layer handles the soft delete logic — setting `is_deleted=True` and `deleted_at=datetime.now()` — and filters out soft-deleted records by default. See [repository-pattern.md](repository-pattern.md) for how `find_all` and `find_paginated` exclude soft-deleted records.
+
 ## Model Definitions
 
 Use the SQLAlchemy 2.0 `Mapped` type-hint style for all models. This provides IDE support, mypy compatibility, and readable definitions.

@@ -64,6 +64,12 @@ Generate production-ready FastAPI code following domain-driven structure with th
 - **Service design, CrudService/Service ABCs, paginated queries, cross-domain services**: Read [service-layer.md](references/service-layer.md)
 - **Endpoint patterns, paginated/filtered endpoints, parameter ordering**: Read [api-endpoints.md](references/api-endpoints.md)
 
+### Authentication & Authorization
+
+- **JWT tokens, password hashing, login/logout/refresh, auth dependencies**: Read [authentication.md](references/authentication.md)
+- **Superuser checks, resource ownership, RBAC, role models, permission anti-patterns**: Read [authorization.md](references/authorization.md)
+- **Registration, profile, password change, soft/hard delete, admin operations**: Read [user-management.md](references/user-management.md)
+
 ### Code Quality
 
 - **Ruff linting/formatting, ty type checking, naming conventions, docstrings**: Read [code-style.md](references/code-style.md)

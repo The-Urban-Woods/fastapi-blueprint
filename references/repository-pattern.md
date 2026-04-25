@@ -119,6 +119,24 @@ class SqlAlchemyRepository(Repository[ModelType, int, CreateSchemaType, UpdateSc
 - **`exclude_unset=True` for updates** — only applies fields explicitly provided, enabling PATCH semantics.
 - **Sorting via `_apply_sort`** — all `find_all` queries support an optional `sort` parameter. Format is comma-separated fields, `-` prefix for descending: `sort="name,-created_at"`. Guarded by `SORTABLE_FIELDS` whitelist — fields not in the whitelist are silently ignored.
 
+## Soft Delete Filtering
+
+For models that use the `SoftDeleteMixin` (see [sqlalchemy-usage.md](sqlalchemy-usage.md)), override `find_all` in the domain repository to exclude soft-deleted records by default:
+
+```python
+async def find_all(
+    self, *, skip: int = 0, limit: int = 100, sort: str | None = None, include_deleted: bool = False
+) -> list[User]:
+    stmt = select(self.model)
+    if not include_deleted:
+        stmt = stmt.where(self.model.is_deleted == False)
+    stmt = self._apply_sort(stmt, sort)
+    result = await self.db.execute(stmt.offset(skip).limit(limit))
+    return list(result.scalars().all())
+```
+
+The same pattern applies to `find_paginated` — add the `is_deleted == False` condition to the base statement before applying other filters. Admin endpoints can pass `include_deleted=True` to see all records.
+
 ## Paginated SQLAlchemy Repository
 
 For domains with large collections that need pagination, filtering, and sorting, extend `PaginatedSqlAlchemyRepository` instead of `SqlAlchemyRepository`. It adds `find_paginated` with filter conditions support.
