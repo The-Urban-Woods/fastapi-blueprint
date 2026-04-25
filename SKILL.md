@@ -48,8 +48,10 @@ Generate production-ready FastAPI code following domain-driven structure with th
 
 ### Data Layer
 
-- **SQLAlchemy Base, ORM models, Pydantic schemas, transaction management**: Read [database-setup.md](references/database-setup.md)
+- **SQLAlchemy Base, Pydantic schemas, DI-managed engine/session, transaction management**: Read [database-setup.md](references/database-setup.md)
+- **Model definitions, relationships, query patterns, mixins, upserts**: Read [sqlalchemy-usage.md](references/sqlalchemy-usage.md)
 - **Repository ABC, SqlAlchemyRepository, domain repositories**: Read [repository-pattern.md](references/repository-pattern.md)
+- **Database migrations with Alembic — setup, CLI, autogenerate, deployment**: Read [alembic-migrations.md](references/alembic-migrations.md)
 
 ### Business & API Layer
 

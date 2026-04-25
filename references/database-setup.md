@@ -2,41 +2,29 @@
 
 ## Declarative Base
 
-`app/shared/database.py` contains only the SQLAlchemy `Base` class. Engine creation, session management, and lifecycle are handled by dishka providers — not module-level globals.
+`app/shared/database.py` contains the SQLAlchemy `Base` class with a constraint naming convention, and shared mixins. Engine creation, session management, and lifecycle are handled by dishka providers — not module-level globals.
 
 ```python
+from sqlalchemy import MetaData
 from sqlalchemy.orm import DeclarativeBase
+
+convention = {
+    "all_column_names": lambda constraint, table: "_".join(
+        [column.name for column in constraint.columns.values()]
+    ),
+    "ix": "ix__%(table_name)s__%(all_column_names)s",
+    "uq": "uq__%(table_name)s__%(all_column_names)s",
+    "ck": "ck__%(table_name)s__%(constraint_name)s",
+    "fk": "fk__%(table_name)s__%(all_column_names)s__%(referred_table_name)s",
+    "pk": "pk__%(table_name)s",
+}
 
 
 class Base(DeclarativeBase):
-    pass
+    metadata = MetaData(naming_convention=convention)
 ```
 
-## SQLAlchemy Models
-
-Define models in each domain's `models.py`, inheriting from `Base`:
-
-```python
-from datetime import datetime
-
-from sqlalchemy import String, func
-from sqlalchemy.orm import Mapped, mapped_column
-
-from app.shared.database import Base
-
-
-class User(Base):
-    __tablename__ = "users"
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-    email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
-    name: Mapped[str] = mapped_column(String(255))
-    is_active: Mapped[bool] = mapped_column(default=True)
-    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(
-        server_default=func.now(), onupdate=func.now()
-    )
-```
+The naming convention ensures all constraints get predictable names, which is required for Alembic autogenerate. For shared mixins like `TimestampMixin`, see [sqlalchemy-usage.md](sqlalchemy-usage.md).
 
 ## Pydantic Schemas
 
@@ -92,6 +80,17 @@ async def lifespan(app: FastAPI):
     await app.state.dishka_container.close()
 ```
 
+Once Alembic is configured, remove `create_all` from the lifespan — having both leads to schema drift where Alembic won't detect changes that `create_all` already applied. The lifespan simplifies to:
+
+```python
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    yield
+    await app.state.dishka_container.close()
+```
+
+Schema changes then go through Alembic migrations exclusively. See [alembic-migrations.md](alembic-migrations.md) for setup.
+
 ## Transaction Management
 
 - One transaction per request, managed by the dishka session provider
@@ -99,3 +98,9 @@ async def lifespan(app: FastAPI):
 - `commit()` happens automatically when the request scope exits successfully
 - `rollback()` happens automatically on exception
 - This ensures all repository operations within a single request are atomic
+
+## Further Reading
+
+- **Model definitions, relationships, query patterns, mixins**: See [sqlalchemy-usage.md](sqlalchemy-usage.md)
+- **Database migrations with Alembic**: See [alembic-migrations.md](alembic-migrations.md)
+- **Repository ABC and SQLAlchemy implementation**: See [repository-pattern.md](repository-pattern.md)

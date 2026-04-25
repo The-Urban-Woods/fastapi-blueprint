@@ -16,26 +16,6 @@ To use this skill in your own environment you may follow the instructions for yo
 npx skills add https://github.com/The-Urban-Woods/fastapi-blueprint
 ```
 
-## Reference Guides
-
-The skill includes detailed reference guides covering every layer of the architecture:
-
-| Guide | Topics |
-| --- | --- |
-| [project-structure.md](references/project-structure.md) | Project layout, naming conventions, module init |
-| [app-entrypoint.md](references/app-entrypoint.md) | App factory, lifespan, middleware, router registration |
-| [configuration.md](references/configuration.md) | Settings, environment variables, pydantic-settings |
-| [database-setup.md](references/database-setup.md) | SQLAlchemy Base, ORM models, Pydantic schemas, transactions |
-| [repository-pattern.md](references/repository-pattern.md) | Repository ABC, SqlAlchemyRepository, domain repositories |
-| [service-layer.md](references/service-layer.md) | Service design, CrudService/Service ABCs, cross-domain services |
-| [api-endpoints.md](references/api-endpoints.md) | DishkaRoute, FromDishka, endpoint patterns |
-| [dependency-injection.md](references/dependency-injection.md) | Dishka providers, scopes, wiring, usage outside FastAPI |
-| [background-jobs.md](references/background-jobs.md) | Celery setup, using services in tasks, retries, workflows |
-| [testing.md](references/testing.md) | Test fixtures, TestAppProvider, integration and unit testing |
-| [code-style.md](references/code-style.md) | Ruff linting/formatting, ty type checking, naming conventions |
-| [uv-package-manager.md](references/uv-package-manager.md) | uv commands, dependencies, lockfile, Docker, CI/CD |
-| [task-runner.md](references/task-runner.md) | Poe the Poet task runner, composing tasks, CLI arguments |
-
 ## Contributions
 
 We welcome contributions to the FastAPI Blueprint skill. If you would like to contribute, please submit a pull request or open an issue.
