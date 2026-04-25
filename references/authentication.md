@@ -24,6 +24,8 @@ User registration and profile management stay in the `users` domain — auth onl
 Extend the `Settings` class in `app/shared/config.py`:
 
 ```python
+from typing import Literal
+
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings
 
@@ -38,7 +40,7 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
     COOKIE_SECURE: bool = True
-    COOKIE_SAMESITE: str = "lax"
+    COOKIE_SAMESITE: Literal["lax", "strict", "none"] = "lax"
 
     model_config = {"env_file": ".env"}
 ```
@@ -198,15 +200,16 @@ For high-traffic applications, consider Redis for blacklist storage instead of t
 
 ## Authentication Dependencies
 
-Define in `app/auth/dependencies.py`. These use `Depends()` for the OAuth2 security scheme — this is the accepted use case for `Depends()` in this project.
+Define in `app/auth/dependencies.py`. These combine `Depends()` for the OAuth2 security scheme (a FastAPI feature) with `FromDishka` for service injection. The `@inject` decorator is required — `DishkaRoute` only auto-injects at the endpoint level, not in sub-dependencies called via `Depends()`.
 
 ```python
+from dishka.integrations.fastapi import FromDishka, inject
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 
 from app.auth.service import AuthService
 from app.auth.utils import verify_token
-from app.shared.config import get_settings
+from app.shared.config import Settings
 from app.users.models import User
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/v1/auth/login")
@@ -218,11 +221,12 @@ optional_oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/v1/auth/login", auto
 Returns the authenticated `User` ORM model. Raises 401 if the token is invalid, blacklisted, or the user doesn't exist.
 
 ```python
+@inject
 async def get_current_user(
+    auth_service: FromDishka[AuthService],
+    settings: FromDishka[Settings],
     token: str = Depends(oauth2_scheme),
-    auth_service: AuthService = Depends(),
 ) -> User:
-    settings = get_settings()
     token_data = verify_token(token, "access", settings)
     if not token_data:
         raise HTTPException(
@@ -246,21 +250,29 @@ async def get_current_user(
     return user
 ```
 
-Note: `auth_service` uses `Depends()` here rather than `FromDishka` because auth dependencies are standard FastAPI dependencies, not endpoint parameters. The `AuthService` can be wired via a `get_auth_service` dependency that resolves it from the Dishka container, or registered as a FastAPI dependency directly.
+**Why `@inject` + `FromDishka` instead of `Depends()`:**
+- `FromDishka[AuthService]` resolves from the Dishka container — same as endpoint parameters
+- `@inject` is required because this function is called via `Depends()`, not as an endpoint. `DishkaRoute` only processes `FromDishka` on the top-level endpoint function, not its sub-dependencies.
+- `FromDishka` parameters go before `Depends()` parameters (Python requires non-default params before default params)
+- Do NOT use `= None` defaults on `FromDishka` parameters — Dishka's `@inject` strips them from FastAPI's parameter resolution and fills them from the container. Using `= None` silences the type checker but introduces a type lie.
 
 ### get_optional_user
 
 For endpoints that work both authenticated and unauthenticated:
 
 ```python
+@inject
 async def get_optional_user(
+    auth_service: FromDishka[AuthService],
+    settings: FromDishka[Settings],
     token: str | None = Depends(optional_oauth2_scheme),
-    auth_service: AuthService = Depends(),
 ) -> User | None:
     if not token:
         return None
     try:
-        return await get_current_user(token=token, auth_service=auth_service)
+        return await get_current_user(
+            auth_service=auth_service, settings=settings, token=token
+        )
     except HTTPException:
         return None
 ```

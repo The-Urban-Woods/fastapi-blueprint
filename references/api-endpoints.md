@@ -112,6 +112,51 @@ async def list_users(
 
 For simple lists that don't need pagination metadata, keep the existing `list[UserRead]` pattern with `skip`/`limit`.
 
+## Nested Resource Endpoints
+
+For child resources under a parent URL (e.g., `/buildings/{building_id}/spaces`), the parent ID comes from the URL path. Inject it into the Create schema using `model_copy` before passing to the service — never construct ORM objects in the endpoint.
+
+```python
+@router.post(
+    "/{building_id}/spaces",
+    response_model=BuildingSpaceRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_building_space(
+    building_id: int,
+    space_in: BuildingSpaceCreate,
+    building_service: FromDishka[BuildingService],
+    space_service: FromDishka[BuildingSpaceService],
+    _admin: User = Depends(require_role(Role.ADMIN)),
+):
+    building = await building_service.get(building_id)
+    if not building:
+        raise HTTPException(status_code=404, detail="Building not found")
+    space_in = space_in.model_copy(update={"building_id": building_id})
+    return await space_service.create(space_in)
+```
+
+Key points:
+- The `BuildingSpaceCreate` schema includes `building_id` as a field (inherited from its Base), but the client doesn't need to send it — the URL provides it
+- `model_copy(update={"building_id": building_id})` sets the parent ID on the schema before passing to the service
+- The service receives a complete schema and passes it to the repository — no ORM construction in the endpoint
+- Validate the parent exists before creating the child
+
+**Anti-pattern — constructing ORM objects in the endpoint:**
+
+```python
+# Wrong — endpoint reaches into repository layer
+@router.post("/{building_id}/spaces", ...)
+async def create_building_space(...):
+    db = space_service.repo.db  # Violates layering
+    space = BuildingSpace(building_id=building_id, **space_in.model_dump())
+    db.add(space)
+    await db.flush()
+    return space
+```
+
+The endpoint should never touch `AsyncSession`, repository internals, or ORM models directly. All entity creation flows through `service.create()`.
+
 ## Parameter Ordering
 
 Python requires parameters without defaults before parameters with defaults. Place `FromDishka` parameters before query parameters with defaults:

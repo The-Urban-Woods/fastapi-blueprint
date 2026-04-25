@@ -117,6 +117,33 @@ def get_engine(self, settings: Settings) -> AsyncEngine:
     return create_async_engine(settings.DATABASE_URL)
 ```
 
+## Using FromDishka in FastAPI Sub-Dependencies
+
+`DishkaRoute` only processes `FromDishka` on top-level endpoint functions. If a sub-dependency (called via `Depends()`) also needs Dishka injection, decorate it with `@inject`:
+
+```python
+from dishka.integrations.fastapi import FromDishka, inject
+from fastapi import Depends
+from fastapi.security import OAuth2PasswordBearer
+
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/v1/auth/login")
+
+
+@inject
+async def get_current_user(
+    auth_service: FromDishka[AuthService],
+    settings: FromDishka[Settings],
+    token: str = Depends(oauth2_scheme),
+) -> User:
+    ...
+```
+
+- `@inject` is required — without it, `FromDishka` parameters are not resolved
+- `FromDishka` parameters must come before `Depends()` parameters (no default before default)
+- Do NOT use `= None` as a default on `FromDishka` parameters — `@inject` handles resolution. `= None` introduces a type error (`None` is not assignable to `AuthService`)
+
+This pattern is used for auth dependencies. See [authentication.md](authentication.md) for the full implementation.
+
 ## Using Outside FastAPI (Celery, CLI)
 
 The same providers work with dishka's Celery or standalone integrations:

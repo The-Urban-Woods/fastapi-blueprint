@@ -81,6 +81,69 @@ class UserRead(UserBase):
 - `gt` / `ge` / `lt` / `le` for numbers
 - `pattern` for regex validation (e.g., `pattern=r"^[a-z0-9_]+$"` for slugs)
 
+### Decimal Fields
+
+Use `Decimal` (not `float`) for monetary values, prices, and precise measurements. This matches the `Numeric` column type in the ORM layer and preserves precision across serialization.
+
+```python
+from decimal import Decimal
+from typing import Annotated
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class ProductBase(BaseModel):
+    price: Annotated[Decimal, Field(ge=0, decimal_places=2)]
+    tax_rate: Annotated[Decimal, Field(ge=0, le=1, decimal_places=4)]
+
+
+class ProductRead(ProductBase):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+```
+
+Pydantic v2 serializes `Decimal` as strings in JSON by default. This is the correct behavior for precision — clients parse the string into their own decimal type. If you need numeric JSON output for a specific use case, configure it per-field with `PlainSerializer`.
+
+**Anti-pattern — using `float` for monetary values:**
+
+```python
+# Wrong — float loses precision (0.1 + 0.2 != 0.3)
+class ProductBase(BaseModel):
+    price: float
+```
+
+The `Decimal` type must be consistent across all three layers: `Mapped[Decimal]` in the model, `Decimal` in the schema, `Numeric(p, s)` in the column. Mixing `float` anywhere in the chain defeats the purpose of using `Numeric`.
+
+### Date and Time Fields
+
+Use Python's `datetime` module types in schemas to match the ORM model types. Pydantic handles serialization to ISO 8601 strings automatically.
+
+```python
+from datetime import date, datetime, time
+
+from pydantic import BaseModel, ConfigDict
+
+
+class EventBase(BaseModel):
+    event_date: date                        # "2026-04-25"
+    start_time: time | None = None          # "14:30:00"
+
+
+class EventRead(EventBase):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    created_at: datetime                    # "2026-04-25T14:30:00"
+```
+
+| Python type | JSON format | Example |
+|---|---|---|
+| `date` | `YYYY-MM-DD` | `"2026-04-25"` |
+| `time` | `HH:MM:SS` | `"14:30:00"` |
+| `datetime` | `YYYY-MM-DDTHH:MM:SS` | `"2026-04-25T14:30:00"` |
+
+The types must match across layers: `Mapped[date]` in the model, `date` in the schema, `Date` in the column. Never use `str` for date/time fields — it breaks validation, serialization, and comparison operators.
+
 ## Swagger Examples
 
 For complex or business-critical models, add `examples` via `Field` or `model_config` to improve API documentation.

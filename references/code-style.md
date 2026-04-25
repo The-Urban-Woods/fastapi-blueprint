@@ -35,6 +35,18 @@ ruff check --fix .  # Lint and auto-fix
 ruff format .       # Format code
 ```
 
+### Excluding Generated Code
+
+Exclude directories with auto-generated code (e.g., Alembic migrations) from type checking. Type checkers can't auto-fix generated code, so they produce noise without value.
+
+```toml
+# pyproject.toml
+[tool.ty.src]
+exclude = ["alembic/versions"]
+```
+
+**Do not exclude generated code from ruff.** Ruff can auto-fix and format generated code — keeping it clean and consistent. Run `ruff check --fix` and `ruff format` on all files including generated ones.
+
 ## Type Checking with ty
 
 Use `ty` (by Astral, makers of ruff and uv) for type checking. It is 10-100x faster than mypy, written in Rust, and uses a rule-based system with configurable severities.

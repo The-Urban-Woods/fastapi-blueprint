@@ -12,18 +12,21 @@ Decouple long-running or unreliable work from request/response cycles. Return im
 
 ## Setup
 
-### Celery App
+### Celery App with Dishka
 
-Create `app/worker.py` as the Celery entrypoint:
+Create `app/worker.py` as the Celery entrypoint. Use `DishkaTask` as the base task class so every task gets automatic dependency injection via Dishka — the same providers and scopes as FastAPI.
 
 ```python
 from celery import Celery
 from dishka import make_container
-from dishka.integrations.celery import setup_dishka
+from dishka.integrations.celery import DishkaTask, setup_dishka
 
 from app.providers import AppProvider, RequestProvider
+from app.shared.config import get_settings
 
-celery_app = Celery("worker", broker="redis://localhost:6379")
+settings = get_settings()
+
+celery_app = Celery("worker", broker=settings.CELERY_BROKER_URL, task_cls=DishkaTask)
 
 celery_app.conf.update(
     task_time_limit=3600,              # Hard limit: 1 hour
@@ -37,6 +40,11 @@ celery_app.conf.update(
 container = make_container(AppProvider(), RequestProvider())
 setup_dishka(container, celery_app)
 ```
+
+Key points:
+- `task_cls=DishkaTask` — sets the default base class for all tasks, enabling automatic `FromDishka` injection without needing `@inject` on each task
+- `make_container` (not `make_async_container`) — Celery tasks are synchronous. Dishka handles async providers (like the session generator) internally.
+- Same `AppProvider` and `RequestProvider` as FastAPI — services, repositories, and sessions are shared. Each task execution gets its own `Scope.REQUEST`, so sessions and services are fresh per task.
 
 ### Configuration
 
@@ -59,48 +67,69 @@ celery -A app.worker worker --loglevel=info
 
 ## Using Services in Tasks
 
-Inject services with `FromDishka` — the same providers and scopes as FastAPI. Each task execution gets its own `Scope.REQUEST`, so sessions, repositories, and services are fresh per task.
+Inject services with `FromDishka` — identical to how endpoints use `FromDishka`. `DishkaTask` handles the injection automatically. Each task execution gets its own `Scope.REQUEST`, so sessions, repositories, and services are fresh per task.
 
 ```python
-from celery import Celery
-from dishka.integrations.celery import inject, FromDishka
+from dishka.integrations.celery import FromDishka
 
 from app.worker import celery_app
 from app.users.service import UserService
 
 
 @celery_app.task
-@inject
 def send_welcome_email(user_id: int, user_service: FromDishka[UserService]) -> None:
     """Send welcome email to a newly registered user."""
-    user = user_service.get(user_id)
+    import asyncio
+    asyncio.run(_send_welcome(user_id, user_service))
+
+
+async def _send_welcome(user_id: int, user_service: UserService) -> None:
+    user = await user_service.get(user_id)
     if not user:
         return
 
-    email_client.send(
-        to=user.email,
-        subject="Welcome!",
-        body=f"Hi {user.name}, thanks for signing up.",
-    )
+    # email_client.send(to=user.email, subject="Welcome!", body=f"Hi {user.name}")
 ```
 
-Note: Celery tasks are synchronous by default. If your services are async, use `asyncio.run()`:
+### Async Services in Sync Tasks
+
+Celery tasks are synchronous by default. Since our services are async (they use `AsyncSession`), wrap the async call with `asyncio.run()`:
 
 ```python
-import asyncio
+@celery_app.task
+def process_report(
+    report_id: str,
+    report_service: FromDishka[ReportService],
+) -> dict:
+    return asyncio.run(_process(report_id, report_service))
 
+
+async def _process(report_id: str, report_service: ReportService) -> dict:
+    report = await report_service.get(report_id)
+    # ... async processing ...
+    return result
+```
+
+The `FromDishka` parameters are resolved by Dishka before the task body runs. The injected service is a fully wired instance with its session and dependencies already set up. You pass it into the async helper as a regular argument.
+
+### Without DishkaTask
+
+If `DishkaTask` is not set as the global task class, use `@inject` or `base=DishkaTask` per task:
+
+```python
+from dishka.integrations.celery import DishkaTask, FromDishka, inject
+
+# Option A: per-task base class
+@celery_app.task(base=DishkaTask)
+def my_task(service: FromDishka[MyService]) -> None: ...
+
+# Option B: inject decorator
 @celery_app.task
 @inject
-def deactivate_expired_users(user_service: FromDishka[UserService]) -> None:
-    """Deactivate users whose trial has expired."""
-    asyncio.run(_deactivate_expired_users(user_service))
-
-async def _deactivate_expired_users(user_service: UserService) -> None:
-    users = await user_service.find_all(limit=1000)
-    for user in users:
-        if user.trial_expired:
-            await user_service.update(user.id, UserUpdate(is_active=False))
+def my_task(service: FromDishka[MyService]) -> None: ...
 ```
+
+Prefer setting `task_cls=DishkaTask` globally in the Celery app to avoid decorating every task.
 
 ## Triggering Tasks from Endpoints
 
@@ -141,33 +170,37 @@ async def create_user(
     autoretry_for=(ConnectionError, TimeoutError),
     default_retry_delay=60,
 )
-@inject
 def sync_to_external_api(
     self,
     user_id: int,
     user_service: FromDishka[UserService],
 ) -> None:
     """Sync user data to external API with automatic retry."""
-    user = user_service.get(user_id)
+    import asyncio
+    asyncio.run(_sync(user_id, user_service))
+
+
+async def _sync(user_id: int, user_service: UserService) -> None:
+    user = await user_service.get(user_id)
     if not user:
         return  # Don't retry — permanent failure
 
-    external_api.sync_user(user)
+    # external_api.sync_user(user)
 ```
 
 ### Exponential Backoff
 
 ```python
 @celery_app.task(bind=True, max_retries=5)
-@inject
 def process_payment(
     self,
     payment_id: str,
     payment_service: FromDishka[PaymentService],
 ) -> dict:
     """Process payment with exponential backoff."""
+    import asyncio
     try:
-        return payment_service.charge(payment_id)
+        return asyncio.run(payment_service.charge(payment_id))
     except TransientError as e:
         raise self.retry(exc=e, countdown=2 ** self.request.retries * 60)
     except PaymentDeclinedError:
@@ -180,26 +213,27 @@ Tasks may be retried on crash or timeout. Design for safe re-execution.
 
 ```python
 @celery_app.task(bind=True)
-@inject
 def process_order(
     self,
     order_id: int,
     order_service: FromDishka[OrderService],
 ) -> None:
     """Process order idempotently."""
-    order = order_service.get(order_id)
+    import asyncio
+    asyncio.run(_process_order(order_id, order_service))
+
+
+async def _process_order(order_id: int, order_service: OrderService) -> None:
+    order = await order_service.get(order_id)
 
     # Already processed — return early
     if order.status == OrderStatus.COMPLETED:
         return
 
     # Use idempotency key for external calls
-    payment_provider.charge(
-        amount=order.total,
-        idempotency_key=f"order-{order_id}",
-    )
+    # payment_provider.charge(amount=order.total, idempotency_key=f"order-{order_id}")
 
-    order_service.update(order_id, OrderUpdate(status=OrderStatus.COMPLETED))
+    await order_service.update(order_id, OrderUpdate(status=OrderStatus.COMPLETED))
 ```
 
 **Strategies:**
@@ -246,18 +280,24 @@ For long-running tasks, return a job ID and provide a polling endpoint:
 async def start_export(
     request: ExportRequest,
     export_service: FromDishka[ExportService],
+    job_service: FromDishka[BackgroundJobService],
 ):
-    job = await export_service.create(request)
-    generate_export.delay(job.id)
+    from uuid import uuid4
+
+    task_id = str(uuid4())
+    job = await job_service.create_job(task_name="generate_export", task_id=task_id)
+
+    generate_export.delay(job.id, task_id)
+
     return {"job_id": job.id, "poll_url": f"/exports/{job.id}/status"}
 
 
 @router.get("/exports/{job_id}/status")
 async def get_export_status(
     job_id: int,
-    export_service: FromDishka[ExportService],
+    job_service: FromDishka[BackgroundJobService],
 ):
-    job = await export_service.get(job_id)
+    job = await job_service.get(job_id)
     if not job:
         raise HTTPException(status_code=404)
     return {
@@ -267,13 +307,34 @@ async def get_export_status(
     }
 ```
 
+The endpoint creates a `BackgroundJob` record first (to get a pollable ID), then enqueues the Celery task with the `task_id` so the task can update the job record on completion or failure.
+
+## Worker Shutdown
+
+Optionally close the Dishka container on worker shutdown to release connections:
+
+```python
+from celery import current_app
+from celery.signals import worker_process_shutdown
+from dishka import Container
+
+
+@worker_process_shutdown.connect()
+def close_dishka(*args, **kwargs):
+    container: Container = current_app.conf["dishka_container"]
+    container.close()
+```
+
 ## Best Practices
 
-1. **Return immediately** — don't block requests for long operations
-2. **Make tasks idempotent** — safe to retry on any failure
-3. **Use idempotency keys** — for external service calls
-4. **Set timeouts** — both soft and hard limits on every task
-5. **Don't retry permanent failures** — validation errors, invalid credentials
-6. **Retry with backoff** — exponential backoff for transient errors
-7. **Log task transitions** — track state changes for debugging
-8. **Monitor queue depth** — alert on backlog growth
+1. **Use DishkaTask globally** — set `task_cls=DishkaTask` on the Celery app, not per task
+2. **Same providers as FastAPI** — reuse `AppProvider` and `RequestProvider` so services behave identically
+3. **Return immediately** — don't block requests for long operations
+4. **Make tasks idempotent** — safe to retry on any failure
+5. **Use idempotency keys** — for external service calls
+6. **Set timeouts** — both soft and hard limits on every task
+7. **Don't retry permanent failures** — validation errors, invalid credentials
+8. **Retry with backoff** — exponential backoff for transient errors
+9. **Wrap async with asyncio.run()** — Celery tasks are sync, but injected services work with async sessions
+10. **Log task transitions** — track state changes for debugging
+11. **Monitor queue depth** — alert on backlog growth

@@ -158,6 +158,8 @@ dev = [
 asyncio_mode = "auto"
 ```
 
+**Use `[dependency-groups]` for dev dependencies, not `[project.optional-dependencies]`.** Dependency groups (PEP 735) are the standard that uv uses natively — `uv add --dev` writes to `[dependency-groups]`. The older `[project.optional-dependencies]` with extras (`pip install .[dev]`) is for libraries exposing optional feature sets to consumers, not for dev tooling. Do not mix both — having a `dev` group in both sections causes confusion and duplication.
+
 ## Migrating from Other Tools
 
 ```bash

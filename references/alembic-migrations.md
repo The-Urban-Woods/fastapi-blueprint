@@ -51,6 +51,18 @@ ruff_format.entrypoint = ruff
 ruff_format.options = format REVISION_SCRIPT_FILENAME
 ```
 
+### Exclude Generated Migrations from Type Checking
+
+Alembic autogenerate produces code that type checkers can't auto-fix, creating noise in CI and editor diagnostics. Exclude `alembic/versions` from ty:
+
+```toml
+# pyproject.toml
+[tool.ty.src]
+exclude = ["alembic/versions"]
+```
+
+**Do not exclude from ruff.** Ruff's auto-fix (`ruff check --fix`) and formatter (`ruff format`) work well on generated migrations — keeping them clean and consistent. The Ruff post-write hook (see Configuration above) formats migrations at generation time, and `ruff check --fix` catches any remaining issues.
+
 ### env.py (Async)
 
 Configure `env.py` to use the async engine and read the database URL from `Settings`:

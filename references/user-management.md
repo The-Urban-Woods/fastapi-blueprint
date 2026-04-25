@@ -335,7 +335,7 @@ The user repository needs lookup methods beyond the standard CRUD:
 
 ```python
 # app/users/repository.py
-class UserRepository(SqlAlchemyRepository[User, UserCreateInternal, UserUpdate]):
+class UserRepository(SqlAlchemyRepository[User, int, UserCreateInternal, UserUpdate]):
     SORTABLE_FIELDS = {"name", "email", "username", "created_at"}
 
     def __init__(self, db: AsyncSession):

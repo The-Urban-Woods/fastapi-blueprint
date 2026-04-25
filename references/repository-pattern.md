@@ -42,10 +42,13 @@ class Repository(ABC, Generic[ModelType, IdType, CreateSchemaType, UpdateSchemaT
 
 ## SQLAlchemy Implementation
 
-`SqlAlchemyRepository` in `app/shared/sqlalchemy_repository.py` implements the ABC for SQLAlchemy with async sessions. It binds `IdType` to `int` and bounds the schema types to Pydantic `BaseModel`.
+`SqlAlchemyRepository` in `app/shared/sqlalchemy_repository.py` implements the ABC for SQLAlchemy with async sessions. `IdType` is generic (supports `int`, `str`/UUID, etc.) and schema types accept both Pydantic `BaseModel` and dataclasses (for internal schemas like `UserCreateInternal`).
 
 ```python
-from typing import TypeVar
+from __future__ import annotations
+
+from dataclasses import asdict
+from typing import Any, TypeVar, cast
 
 from pydantic import BaseModel
 from sqlalchemy import asc, desc, select
@@ -55,18 +58,19 @@ from app.shared.database import Base
 from app.shared.repository import Repository
 
 ModelType = TypeVar("ModelType", bound=Base)
-CreateSchemaType = TypeVar("CreateSchemaType", bound=BaseModel)
-UpdateSchemaType = TypeVar("UpdateSchemaType", bound=BaseModel)
+IdType = TypeVar("IdType")
+CreateSchemaType = TypeVar("CreateSchemaType")
+UpdateSchemaType = TypeVar("UpdateSchemaType")
 
 
-class SqlAlchemyRepository(Repository[ModelType, int, CreateSchemaType, UpdateSchemaType]):
+class SqlAlchemyRepository(Repository[ModelType, IdType, CreateSchemaType, UpdateSchemaType]):
     SORTABLE_FIELDS: set[str] = set()
 
     def __init__(self, model: type[ModelType], db: AsyncSession):
         self.model = model
         self.db = db
 
-    def _apply_sort(self, stmt, sort: str | None):
+    def _apply_sort(self, stmt: Any, sort: str | None) -> Any:
         if not sort:
             return stmt
         for field in sort.split(","):
@@ -79,8 +83,10 @@ class SqlAlchemyRepository(Repository[ModelType, int, CreateSchemaType, UpdateSc
             stmt = stmt.order_by(desc(column) if descending else asc(column))
         return stmt
 
-    async def get(self, id: int) -> ModelType | None:
-        result = await self.db.execute(select(self.model).where(self.model.id == id))
+    async def get(self, id: IdType) -> ModelType | None:
+        result = await self.db.execute(
+            select(self.model).where(self.model.id == id)  # type: ignore[attr-defined]
+        )
         return result.scalars().first()
 
     async def find_all(
@@ -92,14 +98,21 @@ class SqlAlchemyRepository(Repository[ModelType, int, CreateSchemaType, UpdateSc
         return list(result.scalars().all())
 
     async def create(self, obj_in: CreateSchemaType) -> ModelType:
-        db_obj = self.model(**obj_in.model_dump())
+        if isinstance(obj_in, BaseModel):
+            data = obj_in.model_dump()
+        else:
+            data = asdict(cast(Any, obj_in))
+        db_obj = self.model(**data)
         self.db.add(db_obj)
         await self.db.flush()
         await self.db.refresh(db_obj)
         return db_obj
 
     async def update(self, entity: ModelType, obj_in: UpdateSchemaType) -> ModelType:
-        update_data = obj_in.model_dump(exclude_unset=True)
+        if isinstance(obj_in, BaseModel):
+            update_data = obj_in.model_dump(exclude_unset=True)
+        else:
+            update_data = asdict(cast(Any, obj_in))
         for field, value in update_data.items():
             setattr(entity, field, value)
         await self.db.flush()
@@ -110,10 +123,15 @@ class SqlAlchemyRepository(Repository[ModelType, int, CreateSchemaType, UpdateSc
         await self.db.delete(entity)
 ```
 
+**Type notes:**
+- `self.model.id` uses `# type: ignore[attr-defined]` — type checkers can't prove that a generic `ModelType` bound to `Base` has an `id` attribute, but all models in this project do. This is a known limitation of generic ORM patterns.
+- `create` and `update` handle both Pydantic models (`model_dump()`) and dataclasses (`asdict()`). The `cast(Any, obj_in)` satisfies type checkers that can't narrow the `else` branch to a dataclass.
+- `IdType` is generic — domain repositories specify the concrete type (e.g., `int`, `str` for UUID).
+
 ## Key Design Decisions
 
 - **ABC is framework-agnostic** — `Repository` imports nothing from SQLAlchemy or Pydantic. It can be implemented with any database backend.
-- **`SqlAlchemyRepository` is the concrete base** — it binds the ABC to SQLAlchemy + Pydantic. Domain repositories extend this, not the ABC directly.
+- **`SqlAlchemyRepository` is the concrete base** — it binds the ABC to SQLAlchemy. Accepts both Pydantic models and dataclasses as input schemas. Domain repositories extend this, not the ABC directly.
 - **`db: AsyncSession` via constructor** — injected by dishka at `Scope.REQUEST`. The session is shared across all repositories and services within a request.
 - **`flush()` instead of `commit()`** — repositories flush changes but do not commit. Commit/rollback is handled by the dishka session provider.
 - **`exclude_unset=True` for updates** — only applies fields explicitly provided, enabling PATCH semantics.
@@ -159,7 +177,7 @@ class PaginatedResult(Generic[ModelType]):
 
 
 class PaginatedSqlAlchemyRepository(
-    SqlAlchemyRepository[ModelType, CreateSchemaType, UpdateSchemaType]
+    SqlAlchemyRepository[ModelType, IdType, CreateSchemaType, UpdateSchemaType]
 ):
     async def find_paginated(
         self,
@@ -296,7 +314,7 @@ from app.users.models import User
 from app.users.schemas import UserCreate, UserUpdate
 
 
-class UserRepository(SqlAlchemyRepository[User, UserCreate, UserUpdate]):
+class UserRepository(SqlAlchemyRepository[User, int, UserCreate, UserUpdate]):
     SORTABLE_FIELDS = {"name", "email", "created_at"}
 
     def __init__(self, db: AsyncSession):
@@ -318,7 +336,7 @@ from app.orders.models import Order
 from app.orders.schemas import OrderCreate, OrderUpdate
 
 
-class OrderRepository(PaginatedSqlAlchemyRepository[Order, OrderCreate, OrderUpdate]):
+class OrderRepository(PaginatedSqlAlchemyRepository[Order, int, OrderCreate, OrderUpdate]):
     SORTABLE_FIELDS = {"status", "created_at", "total"}
 
     def __init__(self, db: AsyncSession):

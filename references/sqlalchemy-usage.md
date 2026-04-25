@@ -105,6 +105,8 @@ Use the SQLAlchemy 2.0 `Mapped` type-hint style for all models. This provides ID
 ### Column Types
 
 ```python
+from decimal import Decimal
+
 from sqlalchemy import String, Text, Numeric
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -114,7 +116,7 @@ class Product(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(255))
     description: Mapped[str | None] = mapped_column(Text, default=None)
-    price: Mapped[float] = mapped_column(Numeric(10, 2))
+    price: Mapped[Decimal] = mapped_column(Numeric(10, 2))
     is_available: Mapped[bool] = mapped_column(default=True)
 ```
 
@@ -122,6 +124,45 @@ class Product(Base):
 - `Mapped[str]` makes the column `NOT NULL`
 - Use `String(n)` for bounded text, `Text` for unbounded
 - Use `Numeric(precision, scale)` for monetary values, never `Float`
+- Use `Mapped[Decimal]` (not `Mapped[float]`) with `Numeric` columns — this preserves precision across the ORM boundary and matches the Pydantic `Decimal` type in schemas
+
+### Date and Time Columns
+
+Use Python's `datetime` module types with their matching SQLAlchemy column types. The `Mapped` type hint must match the Python type, not `str`.
+
+```python
+from datetime import date, datetime, time
+
+from sqlalchemy import Date, DateTime, Time
+from sqlalchemy.orm import Mapped, mapped_column
+
+
+class Event(Base):
+    __tablename__ = "events"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    event_date: Mapped[date] = mapped_column(Date)                          # date only (no time)
+    start_time: Mapped[time | None] = mapped_column(Time, nullable=True)    # time only (no date)
+    created_at: Mapped[datetime] = mapped_column(DateTime)                  # date + time
+    deadline: Mapped[date | None] = mapped_column(Date, nullable=True)      # nullable date
+```
+
+| Python type | SQLAlchemy column | Stores | Example |
+|---|---|---|---|
+| `date` | `Date` | Date only | `2026-04-25` |
+| `time` | `Time` | Time only | `14:30:00` |
+| `datetime` | `DateTime` | Date + time | `2026-04-25T14:30:00` |
+
+**Anti-pattern — using `str` for date columns:**
+
+```python
+# Wrong — loses type safety, breaks Pydantic serialization
+start_date: Mapped[str] = mapped_column(Date)
+```
+
+Always use `Mapped[date]` with `Date`, `Mapped[time]` with `Time`, and `Mapped[datetime]` with `DateTime`. The ORM handles conversion between Python types and database types automatically.
+
+For timestamps managed by the database (`created_at`, `updated_at`), use the `TimestampMixin` with `server_default=func.now()` — see the Timestamp Mixin section above.
 
 ### Indexes and Constraints
 
@@ -213,9 +254,121 @@ class Course(Base):
 
 Use an association table for pure many-to-many. If the join table needs extra columns (e.g., `enrolled_at`), promote it to a full model with two foreign keys.
 
-## Query Patterns
+### Cross-Domain Relationships
 
-All queries use the 2.0 `select()` API with `await session.execute()`. The repository handles basic CRUD — the patterns below are for custom queries in domain repositories.
+When a relationship references a model from another domain module (e.g., `RentalAgreement.tenant` → `User`), a direct import would create circular dependencies. Use `TYPE_CHECKING` for the type hint and string annotations for the relationship target.
+
+```python
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+from sqlalchemy import ForeignKey
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.shared.database import Base, TimestampMixin
+
+if TYPE_CHECKING:
+    from app.users.models import User
+
+
+class RentalAgreement(TimestampMixin, Base):
+    __tablename__ = "rental_agreements"
+
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+
+    tenant: Mapped["User"] = relationship("User")
+```
+
+- `from __future__ import annotations` — ensures all annotations are treated as strings at runtime
+- `if TYPE_CHECKING:` — provides IDE and type checker support without introducing runtime imports
+- `Mapped["User"]` — resolves via SQLAlchemy’s mapper registry
+
+**Setting up the reverse relationship on the other domain's model:**
+
+If both domains require navigation, define both sides explicitly using back_populates and string references.
+
+```python
+# app/rental_spaces/models.py
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+from sqlalchemy import ForeignKey
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.shared.database import Base
+
+if TYPE_CHECKING:
+    from app.buildings.models import BuildingSpace
+
+
+class RentalSpace(Base):
+    __tablename__ = "rental_spaces"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    building_space_id: Mapped[int] = mapped_column(
+        ForeignKey("building_spaces.id"),
+        unique=True,
+        index=True,
+    )
+
+    building_space: Mapped["BuildingSpace"] = relationship(
+        "BuildingSpace",
+        back_populates="rental_space",
+    )
+```
+
+```python
+# app/buildings/models.py
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+from sqlalchemy.orm import Mapped, relationship
+
+from app.shared.database import Base
+
+if TYPE_CHECKING:
+    from app.rental_spaces.models import RentalSpace
+
+
+class BuildingSpace(Base):
+    __tablename__ = "building_spaces"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+
+    rental_space: Mapped["RentalSpace | None"] = relationship(
+        "RentalSpace",
+        back_populates="building_space",
+    )
+```
+
+**Prefer unidirectional relationships by default** 
+
+Only define reverse relationships when there is a clear use case. Unnecessary bidirectional links increase coupling between domains and make the model graph harder to reason about.
+
+```python
+class RentalSpace(Base):
+    __tablename__ = "rental_spaces"
+
+    building_space_id: Mapped[int] = mapped_column(
+        ForeignKey("building_spaces.id"),
+        unique=True,
+        index=True,
+    )
+
+    building_space: Mapped["BuildingSpace"] = relationship("BuildingSpace")
+```
+
+Query from the owning domain when reverse navigation is not required:
+
+```python
+stmt = select(RentalSpace).where(
+    RentalSpace.building_space_id == building_space_id
+)
+```
+
 
 ### Filtering
 
@@ -367,7 +520,7 @@ class TestAppProvider(Provider):
 Repositories that need upsert accept `dialect_name: str` alongside the session:
 
 ```python
-class UserRepository(SqlAlchemyRepository[User, UserCreate, UserUpdate]):
+class UserRepository(SqlAlchemyRepository[User, int, UserCreate, UserUpdate]):
     def __init__(self, db: AsyncSession, dialect_name: str):
         super().__init__(User, db)
         self.dialect_name = dialect_name
@@ -407,11 +560,11 @@ class Product(Base):
     __tablename__ = "products"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    price: Mapped[float] = mapped_column(Numeric(10, 2))
-    tax_rate: Mapped[float] = mapped_column(Numeric(5, 4))
+    price: Mapped[Decimal] = mapped_column(Numeric(10, 2))
+    tax_rate: Mapped[Decimal] = mapped_column(Numeric(5, 4))
 
     @hybrid_property
-    def total_price(self) -> float:
+    def total_price(self) -> Decimal:
         return self.price * (1 + self.tax_rate)
 
     @total_price.expression
