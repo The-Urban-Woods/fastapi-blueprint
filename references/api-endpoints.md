@@ -1,0 +1,113 @@
+# API Endpoints
+
+## Router Setup
+
+Use `DishkaRoute` as the route class to enable automatic DI injection without `@inject` decorators.
+
+```python
+from dishka.integrations.fastapi import DishkaRoute, FromDishka
+from fastapi import APIRouter, HTTPException, status
+
+from app.users.schemas import UserCreate, UserRead, UserUpdate
+from app.users.service import UserService
+
+router = APIRouter(route_class=DishkaRoute)
+```
+
+## Endpoint Pattern
+
+Inject services via `FromDishka[ServiceType]`. Endpoints handle HTTP concerns only — status codes, error mapping, response models.
+
+```python
+@router.post("/", response_model=UserRead, status_code=status.HTTP_201_CREATED)
+async def create_user(
+    user_in: UserCreate,
+    user_service: FromDishka[UserService],
+):
+    try:
+        user = await user_service.create(user_in)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return user
+
+
+@router.get("/", response_model=list[UserRead])
+async def list_users(
+    user_service: FromDishka[UserService],
+    skip: int = 0,
+    limit: int = 100,
+):
+    return await user_service.find_all(skip=skip, limit=limit)
+
+
+@router.get("/{user_id}", response_model=UserRead)
+async def get_user(
+    user_id: int,
+    user_service: FromDishka[UserService],
+):
+    user = await user_service.get(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return user
+
+
+@router.patch("/{user_id}", response_model=UserRead)
+async def update_user(
+    user_id: int,
+    user_in: UserUpdate,
+    user_service: FromDishka[UserService],
+):
+    user = await user_service.update(user_id, user_in)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return user
+
+
+@router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_user(
+    user_id: int,
+    user_service: FromDishka[UserService],
+):
+    deleted = await user_service.delete(user_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="User not found")
+```
+
+## Parameter Ordering
+
+Python requires parameters without defaults before parameters with defaults. Place `FromDishka` parameters before query parameters with defaults:
+
+```python
+# Correct
+async def list_users(
+    user_service: FromDishka[UserService],  # no default
+    skip: int = 0,                          # has default
+    limit: int = 100,                       # has default
+): ...
+
+# SyntaxError — default params before non-default
+async def list_users(
+    skip: int = 0,
+    user_service: FromDishka[UserService],
+): ...
+```
+
+## Router Registration
+
+Register routers in `app/main.py` with versioned prefixes:
+
+```python
+from app.users.api import router as users_router
+from app.orders.api import router as orders_router
+
+app.include_router(users_router, prefix=f"{settings.API_V1_STR}/users", tags=["users"])
+app.include_router(orders_router, prefix=f"{settings.API_V1_STR}/orders", tags=["orders"])
+```
+
+## Rules
+
+- Endpoints handle **HTTP concerns only** — status codes, request/response mapping, error translation
+- Never put business logic in endpoints — delegate to services
+- Use `response_model` for response serialization, Pydantic schemas for request validation
+- Map service exceptions to HTTP exceptions at the endpoint level
+- Do NOT inject `AsyncSession` into endpoints — services and repositories handle database access internally
