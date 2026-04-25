@@ -73,6 +73,45 @@ async def delete_user(
         raise HTTPException(status_code=404, detail="User not found")
 ```
 
+## Paginated and Filtered Endpoints
+
+For large collections, use `PaginatedListResponse` with `PaginatedRequestQuery` and a domain filter schema. Both are injected via `Depends()` — this is an accepted use of `Depends()` since it handles FastAPI query parameter grouping, not DI.
+
+```python
+from fastapi import Depends
+
+from app.shared.schemas import PaginatedListResponse, PaginatedRequestQuery
+from app.users.schemas import UserFilter, UserRead
+
+
+@router.get("/", response_model=PaginatedListResponse[UserRead])
+async def list_users(
+    user_service: FromDishka[UserService],
+    pagination: PaginatedRequestQuery = Depends(),
+    filters: UserFilter = Depends(),
+):
+    result = await user_service.find_paginated(
+        filters=filters,
+        page=pagination.page,
+        items_per_page=pagination.items_per_page,
+        sort=pagination.sort,
+    )
+    return PaginatedListResponse(
+        data=result.items,
+        total_count=result.total_count,
+        has_more=(pagination.page * pagination.items_per_page) < result.total_count,
+        page=pagination.page,
+        items_per_page=pagination.items_per_page,
+    )
+```
+
+- `pagination: PaginatedRequestQuery = Depends()` provides `page`, `items_per_page`, and `sort` with defaults, validation, and OpenAPI descriptions defined in one place (see [schemas.md](schemas.md))
+- `filters: UserFilter = Depends()` unpacks the filter schema fields as individual query parameters in OpenAPI docs
+- `sort` accepts a comma-separated string: `name,-created_at` (dash prefix for descending). See [repository-pattern.md](repository-pattern.md) for sort validation and `SORTABLE_FIELDS` whitelist.
+- The endpoint constructs the `PaginatedListResponse` from the `PaginatedResult` returned by the service
+
+For simple lists that don't need pagination metadata, keep the existing `list[UserRead]` pattern with `skip`/`limit`.
+
 ## Parameter Ordering
 
 Python requires parameters without defaults before parameters with defaults. Place `FromDishka` parameters before query parameters with defaults:

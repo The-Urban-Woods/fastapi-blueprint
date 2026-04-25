@@ -179,7 +179,7 @@ class CrudService(Service, Generic[ModelType, IdType, CreateSchemaType, UpdateSc
     async def get(self, id: IdType) -> ModelType | None: ...
 
     @abstractmethod
-    async def find_all(self, *, skip: int = 0, limit: int = 100) -> list[ModelType]: ...
+    async def find_all(self, *, skip: int = 0, limit: int = 100, sort: str | None = None) -> list[ModelType]: ...
 
     @abstractmethod
     async def create(self, obj_in: CreateSchemaType) -> ModelType: ...
@@ -220,8 +220,10 @@ class UserService(CrudService[User, int, UserCreate, UserUpdate]):
     async def get(self, id: int) -> User | None:
         return await self.repo.get(id)
 
-    async def find_all(self, *, skip: int = 0, limit: int = 100) -> list[User]:
-        return await self.repo.find_all(skip=skip, limit=limit)
+    async def find_all(
+        self, *, skip: int = 0, limit: int = 100, sort: str | None = None
+    ) -> list[User]:
+        return await self.repo.find_all(skip=skip, limit=limit, sort=sort)
 
     async def update(self, id: int, obj_in: UserUpdate) -> User | None:
         user = await self.repo.get(id)
@@ -236,6 +238,69 @@ class UserService(CrudService[User, int, UserCreate, UserUpdate]):
         await self.repo.delete(user)
         return True
 ```
+
+## Paginated and Filtered Queries
+
+For domains whose repository extends `PaginatedSqlAlchemyRepository`, add `find_paginated` to the service. This is not part of the `CrudService` ABC — it's an optional method for domains that need pagination and filtering.
+
+### With Generic Filters
+
+When filters use the suffix convention (exact match, comparisons), the service passes them through to the repository's `_apply_filters`:
+
+```python
+from app.shared.paginated_sqlalchemy_repository import PaginatedResult
+
+
+class OrderService(CrudService[Order, int, OrderCreate, OrderUpdate]):
+    def __init__(self, repo: OrderRepository):
+        self.repo = repo
+
+    async def find_paginated(
+        self,
+        *,
+        filters: OrderFilter | None = None,
+        page: int = 1,
+        items_per_page: int = 20,
+        sort: str | None = None,
+    ) -> PaginatedResult[Order]:
+        conditions = (
+            self.repo._apply_filters(filters.model_dump(exclude_unset=True))
+            if filters
+            else None
+        )
+        return await self.repo.find_paginated(
+            page=page, items_per_page=items_per_page, sort=sort, conditions=conditions
+        )
+```
+
+### With FilterBuilder
+
+When a domain needs complex filter logic (search across columns, conditional expressions), use a `FilterBuilder` instead:
+
+```python
+from app.shared.paginated_sqlalchemy_repository import PaginatedResult
+from app.users.filters import UserFilterBuilder
+
+
+class UserService(CrudService[User, int, UserCreate, UserUpdate]):
+    def __init__(self, repo: UserRepository):
+        self.repo = repo
+
+    async def find_paginated(
+        self,
+        *,
+        filters: UserFilter | None = None,
+        page: int = 1,
+        items_per_page: int = 20,
+        sort: str | None = None,
+    ) -> PaginatedResult[User]:
+        conditions = UserFilterBuilder.build(filters) if filters else None
+        return await self.repo.find_paginated(
+            page=page, items_per_page=items_per_page, sort=sort, conditions=conditions
+        )
+```
+
+The service decides which approach fits the domain. The repository's `find_paginated` is agnostic — it only sees the resulting conditions list.
 
 ## Domain Service (Non-CRUD)
 

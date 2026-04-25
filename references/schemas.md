@@ -304,6 +304,156 @@ class UserUpdate(BaseModel):
 
 A request with `{"name": "Alice"}` only updates `name` — `email` and `is_active` are untouched because they were not sent (unset), not because they are `None`.
 
+## Paginated Response
+
+Define the paginated response wrapper in `app/shared/schemas.py`:
+
+```python
+from typing import Generic, TypeVar
+
+from pydantic import BaseModel
+
+SchemaType = TypeVar("SchemaType")
+
+
+class PaginatedListResponse(BaseModel, Generic[SchemaType]):
+    data: list[SchemaType]
+    total_count: int
+    has_more: bool
+    page: int | None = None
+    items_per_page: int | None = None
+```
+
+Usage in endpoints:
+
+```python
+@router.get("/", response_model=PaginatedListResponse[UserRead])
+async def list_users(...):
+```
+
+Response shape:
+
+```json
+{
+    "data": [{"id": 1, "name": "Alice", ...}, ...],
+    "total_count": 150,
+    "has_more": true,
+    "page": 2,
+    "items_per_page": 20
+}
+```
+
+Use `PaginatedListResponse` for paginated list endpoints. Simple lists that don't need pagination metadata use `list[SchemaType]` directly. Single-resource endpoints return the schema directly (`response_model=UserRead`).
+
+## Paginated Request Query
+
+Define a shared query parameter model for paginated endpoints in `app/shared/schemas.py`:
+
+```python
+from pydantic import BaseModel, Field
+
+
+class PaginatedRequestQuery(BaseModel):
+    page: int = Field(1, ge=1)
+    items_per_page: int = Field(20, ge=1, le=100)
+    sort: str | None = Field(
+        None,
+        description=(
+            "Sort by one or more fields. Format: 'field1,-field2' "
+            "where '-' prefix indicates descending order."
+        ),
+    )
+```
+
+Used via `Depends()` in endpoints alongside the filter schema:
+
+```python
+@router.get("/", response_model=PaginatedListResponse[UserRead])
+async def list_users(
+    user_service: FromDishka[UserService],
+    pagination: PaginatedRequestQuery = Depends(),
+    filters: UserFilter = Depends(),
+):
+```
+
+This consolidates pagination and sort parameters in one place — defaults, validation bounds, and the sort description are defined once. See [api-endpoints.md](api-endpoints.md) for the full endpoint pattern.
+
+## Filter Schemas
+
+Define a `{Model}Filter` schema for each domain that supports filtering. Filter schemas use `Depends()` in the endpoint to unpack query parameters — this is one of the accepted uses of `Depends()` (see [api-endpoints.md](api-endpoints.md)).
+
+### Simple Filters (Suffix Convention)
+
+For domains with straightforward filtering needs, use field naming with suffix conventions:
+
+```python
+from datetime import datetime
+
+from pydantic import BaseModel, ConfigDict
+
+
+class UserFilter(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    email: str | None = None
+    is_active: bool | None = None
+    created_at_gte: datetime | None = None
+    created_at_lte: datetime | None = None
+    name_like: str | None = None
+```
+
+Suffix conventions:
+- No suffix — exact match (`==`)
+- `_gt` / `_gte` — greater than / greater or equal
+- `_lt` / `_lte` — less than / less or equal
+- `_like` — case-insensitive contains (`ILIKE %value%`)
+
+The base repository's `_apply_filters` translates these automatically. See [repository-pattern.md](repository-pattern.md) for the implementation.
+
+### Complex Filters (FilterBuilder)
+
+When a domain needs filters that go beyond the suffix convention — search across multiple columns, conditional logic, or combined expressions — define a `FilterBuilder` alongside the filter schema:
+
+```python
+# app/users/schemas.py
+class UserFilter(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    email: str | None = None
+    is_active: bool | None = None
+    created_from: datetime | None = None
+    created_until: datetime | None = None
+    search: str | None = None
+```
+
+```python
+# app/users/filters.py
+from app.users.models import User
+from app.users.schemas import UserFilter
+
+
+class UserFilterBuilder:
+    @staticmethod
+    def build(filters: UserFilter) -> list:
+        conditions = []
+        if filters.email:
+            conditions.append(User.email == filters.email)
+        if filters.is_active is not None:
+            conditions.append(User.is_active == filters.is_active)
+        if filters.created_from:
+            conditions.append(User.created_at >= filters.created_from)
+        if filters.created_until:
+            conditions.append(User.created_at <= filters.created_until)
+        if filters.search:
+            search = f"%{filters.search}%"
+            conditions.append(User.name.ilike(search))
+        return conditions
+```
+
+The `FilterBuilder` lives in a separate `filters.py` file in the domain directory since it imports the SQLAlchemy model. The filter schema stays in `schemas.py` — it's a pure Pydantic model with no ORM imports.
+
+Use the suffix convention for simple domains. Switch to a `FilterBuilder` when the filtering logic outgrows what suffixes can express. See [repository-pattern.md](repository-pattern.md) and [service-layer.md](service-layer.md) for how these integrate into the query pipeline.
+
 ## Polymorphic Schemas
 
 Use discriminated unions when a single endpoint accepts or returns different shapes based on a type field.

@@ -21,8 +21,8 @@ Generate production-ready FastAPI code following domain-driven structure with th
 
 - **Domain-driven structure** — organize by business domain, not technical layer. Each domain has its own models, schemas, repository, service, and API. Read [project-structure.md](references/project-structure.md)
 - **Abstract base classes** — repositories implement the `Repository` ABC; CRUD services implement the `CrudService` ABC; non-CRUD services extend the `Service` marker. ABCs live in `app/shared/` and are framework-agnostic.
-- **SQLAlchemy implementation** — domain repositories extend `SqlAlchemyRepository` (which implements the `Repository` ABC), not the ABC directly.
-- **Dishka for all DI** — do NOT use FastAPI's `Depends()` for service or repository injection. Use `FromDishka[T]` and `DishkaRoute`. `Depends()` is only acceptable for non-DI FastAPI features (e.g., path parameters, security schemes). Read [dependency-injection.md](references/dependency-injection.md)
+- **SQLAlchemy implementation** — domain repositories extend `SqlAlchemyRepository` for simple CRUD, or `PaginatedSqlAlchemyRepository` for domains needing pagination and filtering. Never extend the `Repository` ABC directly.
+- **Dishka for all DI** — do NOT use FastAPI's `Depends()` for service or repository injection. Use `FromDishka[T]` and `DishkaRoute`. `Depends()` is only acceptable for non-DI FastAPI features (e.g., path parameters, security schemes, filter schema query parameter grouping). Read [dependency-injection.md](references/dependency-injection.md)
 - **No singletons** — do NOT create module-level instances of repositories or services. All instantiation flows through dishka providers.
 - **No `db` in method signatures** — `AsyncSession` is injected into repositories via constructor, not passed as a method parameter. Services never see `AsyncSession`.
 
@@ -33,6 +33,7 @@ Generate production-ready FastAPI code following domain-driven structure with th
 | **API** (`api.py`)               | FastAPI, Pydantic schemas, Service classes, dishka  | SQLAlchemy, Repository classes   |
 | **Service** (`service.py`)       | Repository classes, domain models, Pydantic schemas | FastAPI, dishka, SQLAlchemy      |
 | **Repository** (`repository.py`) | SQLAlchemy, domain models, Pydantic schemas         | FastAPI, dishka, Service classes |
+| **Filters** (`filters.py`)       | SQLAlchemy models, Pydantic filter schemas          | FastAPI, dishka, Service classes |
 | **Models** (`models.py`)         | SQLAlchemy, `Base`                                  | Everything else                  |
 | **Schemas** (`schemas.py`)       | Pydantic                                            | Everything else                  |
 
@@ -49,15 +50,19 @@ Generate production-ready FastAPI code following domain-driven structure with th
 ### Data Layer
 
 - **SQLAlchemy Base, DI-managed engine/session, transaction management**: Read [database-setup.md](references/database-setup.md)
-- **Pydantic schemas — naming, validation, ConfigDict, polymorphism, testing**: Read [schemas.md](references/schemas.md)
 - **Model definitions, relationships, query patterns, mixins, upserts**: Read [sqlalchemy-usage.md](references/sqlalchemy-usage.md)
-- **Repository ABC, SqlAlchemyRepository, domain repositories**: Read [repository-pattern.md](references/repository-pattern.md)
+- **Repository ABC, SqlAlchemyRepository, PaginatedSqlAlchemyRepository, sorting, filtering**: Read [repository-pattern.md](references/repository-pattern.md)
 - **Database migrations with Alembic — setup, CLI, autogenerate, deployment**: Read [alembic-migrations.md](references/alembic-migrations.md)
+
+### Schemas
+
+- **Pydantic schemas — naming, validation, ConfigDict, internal schemas, polymorphism, testing**: Read [schemas.md](references/schemas.md)
+- Includes: `PaginatedListResponse`, `PaginatedRequestQuery`, filter schemas, `FilterBuilder` pattern
 
 ### Business & API Layer
 
-- **Service design principles, CrudService/Service ABCs, anti-patterns, cross-domain services**: Read [service-layer.md](references/service-layer.md)
-- **DishkaRoute, FromDishka, endpoint patterns, parameter ordering**: Read [api-endpoints.md](references/api-endpoints.md)
+- **Service design, CrudService/Service ABCs, paginated queries, cross-domain services**: Read [service-layer.md](references/service-layer.md)
+- **Endpoint patterns, paginated/filtered endpoints, parameter ordering**: Read [api-endpoints.md](references/api-endpoints.md)
 
 ### Code Quality
 
@@ -74,8 +79,8 @@ Generate production-ready FastAPI code following domain-driven structure with th
 
 ## Quick Reference: Adding a New Domain Module
 
-1. Create `app/{domain}/` with `models.py`, `schemas.py`, `repository.py`, `service.py`, `api.py`, `__init__.py`
-2. Model inherits `Base`, repository extends `SqlAlchemyRepository`, service extends `CrudService` (or `Service` for non-CRUD)
+1. Create `app/{domain}/` with `models.py`, `schemas.py`, `repository.py`, `service.py`, `api.py`, `__init__.py` (add `filters.py` if using a `FilterBuilder`)
+2. Model inherits `Base`, repository extends `SqlAlchemyRepository` (or `PaginatedSqlAlchemyRepository` for large collections), service extends `CrudService` (or `Service` for non-CRUD)
 3. Add `{domain}_repository = provide({Domain}Repository)` and `{domain}_service = provide({Domain}Service)` to `RequestProvider` in `app/providers.py`
 4. Add `app.include_router(router, prefix=..., tags=[...])` in `app/main.py`
 5. Add test file in `tests/test_{domain}.py`
