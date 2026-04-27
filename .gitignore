@@ -2,6 +2,9 @@
 # Finder metadata
 .DS_Store
 
+### IDE
+.idea
+
 # Thumbnails
 ._*
 
