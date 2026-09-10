@@ -1,10 +1,10 @@
 ---
 name: fastapi-blueprint
-description: Generates FastAPI code with domain-driven structure, repository+service pattern, and Dishka dependency injection. Trigger when creating FastAPI applications, adding domain modules, implementing CRUD endpoints, setting up repositories or services, configuring dependency injection, writing tests, or modifying any Python backend API code in this project.
+description: Generates FastAPI code with domain-driven structure, repository+service pattern, and Dishka dependency injection. Trigger when creating a FastAPI application or a new blueprint-style module, adding domain modules, implementing CRUD endpoints, setting up repositories or services, configuring dependency injection, or writing tests for code that already follows this blueprint. Do not apply it to pre-existing code that follows other patterns unless explicitly asked to migrate that code.
 license: MIT
 metadata:
   author: Ariën Tolner, The Urban Woods
-  version: "1.0"
+  version: "1.1"
 ---
 
 # FastAPI Developer
